@@ -9,47 +9,78 @@ st.set_page_config(page_title="Extrator MPRJ", layout="wide")
 st.title("🚗 Extrator de Recibos - TaxiCorp MPRJ")
 
 # =============================
-# FUNÇÃO DE EXTRAÇÃO
+# FUNÇÕES AUXILIARES
+# =============================
+def limpar_texto(texto):
+    if texto:
+        return re.sub(r'\s+', ' ', texto).strip()
+    return None
+
+def buscar_bloco(inicio, fim, texto):
+    padrao = rf'{inicio}\s*(.*?)\s*{fim}'
+    match = re.search(padrao, texto, re.DOTALL)
+    return limpar_texto(match.group(1)) if match else None
+
+
+# =============================
+# EXTRAÇÃO MELHORADA
 # =============================
 def extrair_dados(texto):
 
-    def buscar(padrao):
-        match = re.search(padrao, texto, re.DOTALL)
-        return match.group(1).strip() if match else None
-
     dados = {}
 
-    # Identificação
-    dados['Recibo'] = buscar(r'Recibo de Atendimento #(\d+)')
-    dados['Data Recibo'] = buscar(r'\|\s*(\d{2}/\d{2}/\d{4} \d{2}:\d{2})')
+    # ID e Data
+    dados['Recibo'] = limpar_texto(
+        re.search(r'Recibo de Atendimento #(\d+)', texto).group(1)
+        if re.search(r'Recibo de Atendimento #(\d+)', texto) else None
+    )
 
-    # Pessoas
-    dados['Solicitante'] = buscar(r'Solicitante\s*\n([A-Z\s]+)')
-    dados['Passageiro'] = buscar(r'Passageiro\s*\n(.+)')
+    dados['Data Recibo'] = limpar_texto(
+        re.search(r'\|\s*(\d{2}/\d{2}/\d{4} \d{2}:\d{2})', texto).group(1)
+        if re.search(r'\|\s*(\d{2}/\d{2}/\d{4} \d{2}:\d{2})', texto) else None
+    )
+
+    # Pessoas (agora robusto)
+    dados['Solicitante'] = buscar_bloco("Solicitante", "Passageiro", texto)
+    dados['Passageiro'] = buscar_bloco("Passageiro", "Qtd.", texto)
 
     # Datas
-    dados['Solicitação'] = buscar(r'Solicitação\s*\n([\d/\s:]+)')
-    dados['Embarque'] = buscar(r'Embarque\s*\n([\d/\s:]+)')
-    dados['Desembarque'] = buscar(r'Desembarque\s*\n([\d/\s:]+)')
+    dados['Solicitação'] = buscar_bloco("Solicitação", "Embarque", texto)
+    dados['Embarque'] = buscar_bloco("Embarque", "Desembarque", texto)
+    dados['Desembarque'] = buscar_bloco("Desembarque", "Origem", texto)
 
     # Rota
-    dados['Origem'] = buscar(r'Origem\s+(.*?)\n')
-    dados['Destino'] = buscar(r'Destino\s+(.*?)\n')
+    dados['Origem'] = buscar_bloco("Origem", "Destino", texto)
+    dados['Destino'] = buscar_bloco("Destino", "Observações", texto)
 
     # Operacional
-    dados['Observações'] = buscar(r'Observações\s*\n(.+)')
-    dados['Distância (km)'] = buscar(r'Distância\s*\n(\d+)')
-    dados['Duração (min)'] = buscar(r'Duração\s*\n(\d+)')
+    dados['Observações'] = buscar_bloco("Observações", "Distância", texto)
+    dados['Distância (km)'] = limpar_texto(
+        re.search(r'Distância\s*(\d+)', texto).group(1)
+        if re.search(r'Distância\s*(\d+)', texto) else None
+    )
+
+    dados['Duração (min)'] = limpar_texto(
+        re.search(r'Duração\s*(\d+)', texto).group(1)
+        if re.search(r'Duração\s*(\d+)', texto) else None
+    )
 
     # Financeiro
-    dados['Valor Corrida'] = buscar(r'Valor da Corrida\s*\nR\$ ([\d,]+)')
-    dados['Total Voucher'] = buscar(r'Total do Voucher\s*\nR\$ ([\d,]+)')
+    dados['Valor Corrida'] = limpar_texto(
+        re.search(r'Valor da Corrida\s*R\$ ([\d,]+)', texto).group(1)
+        if re.search(r'Valor da Corrida\s*R\$ ([\d,]+)', texto) else None
+    )
+
+    dados['Total Voucher'] = limpar_texto(
+        re.search(r'Total do Voucher\s*R\$ ([\d,]+)', texto).group(1)
+        if re.search(r'Total do Voucher\s*R\$ ([\d,]+)', texto) else None
+    )
 
     return dados
 
 
 # =============================
-# PROCESSAMENTO DO PDF
+# PROCESSAMENTO
 # =============================
 def processar_pdf(arquivo):
 
@@ -67,7 +98,7 @@ def processar_pdf(arquivo):
 
 
 # =============================
-# UPLOAD
+# INTERFACE
 # =============================
 arquivos = st.file_uploader(
     "📎 Envie os PDFs",
@@ -86,14 +117,17 @@ if arquivos:
 
     df = pd.DataFrame(todos)
 
-    # Tratamento de valores
-    df['Valor Corrida'] = df['Valor Corrida'].str.replace(',', '.').astype(float)
-    df['Total Voucher'] = df['Total Voucher'].str.replace(',', '.').astype(float)
+    # Conversões
+    if 'Valor Corrida' in df.columns:
+        df['Valor Corrida'] = df['Valor Corrida'].str.replace(',', '.').astype(float)
+
+    if 'Total Voucher' in df.columns:
+        df['Total Voucher'] = df['Total Voucher'].str.replace(',', '.').astype(float)
 
     st.subheader("📊 Dados Extraídos")
     st.dataframe(df, use_container_width=True)
 
-    # Download Excel
+    # Download
     buffer = BytesIO()
     df.to_excel(buffer, index=False)
 
