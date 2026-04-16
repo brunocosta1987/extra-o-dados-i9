@@ -6,7 +6,7 @@ from io import BytesIO
 
 st.set_page_config(page_title="Dashboard MPRJ", layout="wide")
 
-st.title("🚗 Dashboard de Recibos - TaxiCorp MPRJ")
+st.title("🚗 Dashboard Inteligente - Recibos MPRJ")
 
 # =============================
 # FUNÇÕES AUXILIARES
@@ -21,25 +21,19 @@ def buscar_bloco(inicio, fim, texto):
     match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
     return limpar_texto(match.group(1)) if match else None
 
-
-# 🔥 FUNÇÃO ROBUSTA PARA VALORES
+# 🔥 EXTRAÇÃO ROBUSTA DE VALORES
 def buscar_valor(label, texto):
-
-    # pega bloco maior após o label
     padrao = rf'{label}(.*?)(?:Valor|Total|Distância|Duração|$)'
     match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
 
     if match:
         trecho = match.group(1)
+        valores = re.findall(r'R?\$?\s*([\d\.,]+)', trecho)
 
-        # pega qualquer número monetário dentro do bloco
-        valor = re.search(r'R?\$?\s*([\d\.,]+)', trecho)
-
-        if valor:
-            return limpar_texto(valor.group(1))
+        if valores:
+            return limpar_texto(valores[0])
 
     return "0"
-
 
 # =============================
 # EXTRAÇÃO
@@ -80,13 +74,11 @@ def extrair_dados(texto):
         if re.search(r'Duração\s*(\d+)', texto) else "0"
     )
 
-    # 🔥 VALORES CORRIGIDOS
     dados['Valor Corrida'] = buscar_valor("Valor da Corrida", texto)
-    dados['Total Voucher'] = buscar_valor("Total do Voucher", texto)
     dados['Pedágio'] = buscar_valor("Pedágio", texto)
+    dados['Total Voucher'] = buscar_valor("Total do Voucher", texto)
 
     return dados
-
 
 # =============================
 # PROCESSAMENTO
@@ -98,21 +90,28 @@ def processar_pdf(arquivo):
     with pdfplumber.open(arquivo) as pdf:
         for pagina in pdf.pages:
             texto = pagina.extract_text()
-
             if texto:
                 registros.append(extrair_dados(texto))
 
     return registros
 
+# =============================
+# CONVERSÃO SEGURA (SEM ARREDONDAR)
+# =============================
+def converter_valor(coluna):
+    return pd.to_numeric(
+        coluna
+        .fillna("0")
+        .astype(str)
+        .str.replace(r'[^\d,]', '', regex=True)
+        .str.replace(',', '.', regex=False),
+        errors='coerce'
+    )
 
 # =============================
 # INTERFACE
 # =============================
-arquivos = st.file_uploader(
-    "📎 Envie os PDFs",
-    type="pdf",
-    accept_multiple_files=True
-)
+arquivos = st.file_uploader("📎 Envie os PDFs", type="pdf", accept_multiple_files=True)
 
 if arquivos:
 
@@ -124,25 +123,26 @@ if arquivos:
 
     df = pd.DataFrame(todos)
 
-    # =============================
-    # CONVERSÃO CORRIGIDA
-    # =============================
-    def converter_valor(coluna):
-        return (
-            coluna.fillna("0")
-            .astype(str)
-            .str.replace(r'[^\d,]', '', regex=True)
-            .str.replace(',', '.', regex=False)
-            .astype(float)
-        )
-
+    # Conversões
     df['Valor Corrida'] = converter_valor(df['Valor Corrida'])
-    df['Total Voucher'] = converter_valor(df['Total Voucher'])
     df['Pedágio'] = converter_valor(df['Pedágio'])
-    df['Distância (km)'] = pd.to_numeric(df['Distância (km)'], errors='coerce').fillna(0)
+    df['Total Voucher'] = converter_valor(df['Total Voucher'])
 
+    df['Distância (km)'] = pd.to_numeric(df['Distância (km)'], errors='coerce')
+
+    df = df.fillna(0)
+
+    # Datas
     df['Data Recibo'] = pd.to_datetime(df['Data Recibo'], errors='coerce')
     df['Dia'] = df['Data Recibo'].dt.date
+
+    # =============================
+    # VALIDAÇÃO (🔥 NOVO)
+    # =============================
+    df['Valor Calculado'] = df['Valor Corrida'] + df['Pedágio']
+    df['Diferença'] = df['Total Voucher'] - df['Valor Calculado']
+
+    inconsistencias = df[df['Diferença'].abs() > 0.01]
 
     # =============================
     # KPIs
@@ -154,45 +154,46 @@ if arquivos:
     col1.metric("🚗 KM Total", f"{df['Distância (km)'].sum():,.0f}")
     col2.metric("🛣️ Pedágio", f"R$ {df['Pedágio'].sum():,.2f}")
     col3.metric("💰 Voucher", f"R$ {df['Total Voucher'].sum():,.2f}")
-    col4.metric("📄 Qtde Recibos", len(df))
+    col4.metric("📄 Recibos", len(df))
+
+    # =============================
+    # ALERTA
+    # =============================
+    if not inconsistencias.empty:
+        st.error(f"⚠️ {len(inconsistencias)} inconsistências encontradas!")
+
+        st.dataframe(inconsistencias[
+            ['Recibo', 'Valor Corrida', 'Pedágio', 'Total Voucher', 'Diferença']
+        ])
+
+    else:
+        st.success("✅ Todos os valores conferem!")
 
     # =============================
     # GRÁFICOS
     # =============================
     st.subheader("📈 Análises")
 
-    gasto_dia = df.groupby('Dia')['Total Voucher'].sum().reset_index()
-    st.line_chart(gasto_dia.set_index('Dia'))
+    gasto_dia = df.groupby('Dia')['Total Voucher'].sum()
+    st.line_chart(gasto_dia)
 
-    km_dia = df.groupby('Dia')['Distância (km)'].sum().reset_index()
-    st.bar_chart(km_dia.set_index('Dia'))
+    km_dia = df.groupby('Dia')['Distância (km)'].sum()
+    st.bar_chart(km_dia)
 
-    st.subheader("👤 Top 10 Passageiros")
-    top_passageiros = (
-        df.groupby('Passageiro')['Total Voucher']
-        .sum()
-        .sort_values(ascending=False)
-        .head(10)
-    )
+    st.subheader("👤 Top Passageiros")
+    top_passageiros = df.groupby('Passageiro')['Total Voucher'].sum().sort_values(ascending=False).head(10)
     st.bar_chart(top_passageiros)
 
     # =============================
-    # FILTRO
+    # DEBUG OPCIONAL
     # =============================
-    st.subheader("🔍 Filtros")
-
-    passageiros = st.multiselect(
-        "Filtrar por Passageiro",
-        options=df['Passageiro'].dropna().unique()
-    )
-
-    if passageiros:
-        df = df[df['Passageiro'].isin(passageiros)]
+    with st.expander("🔍 Debug de valores extraídos"):
+        st.dataframe(df[['Valor Corrida', 'Pedágio', 'Total Voucher']].head(20))
 
     # =============================
-    # TABELA
+    # TABELA FINAL
     # =============================
-    st.subheader("📋 Dados Detalhados")
+    st.subheader("📋 Dados Completos")
     st.dataframe(df, use_container_width=True)
 
     # =============================
@@ -204,6 +205,6 @@ if arquivos:
     st.download_button(
         label="📥 Baixar Excel",
         data=buffer.getvalue(),
-        file_name="dashboard_mprj.xlsx",
+        file_name="dashboard_validado.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
