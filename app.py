@@ -4,102 +4,188 @@ import pandas as pd
 import re
 from io import BytesIO
 
-st.set_page_config(page_title="Extrator MPRJ", layout="wide")
+st.set_page_config(page_title="Dashboard MPRJ", layout="wide")
 
-st.title("🚗 Extrator de Recibos - TaxiCorp MPRJ")
+st.title("🚗 Dashboard de Recibos - TaxiCorp MPRJ")
 
 # =============================
-# FUNÇÃO DE EXTRAÇÃO
+# FUNÇÕES AUXILIARES
+# =============================
+def limpar_texto(texto):
+    if texto:
+        return re.sub(r'\s+', ' ', texto).strip()
+    return None
+
+def buscar_bloco(inicio, fim, texto):
+    padrao = rf'{inicio}\s*(.*?)\s*{fim}'
+    match = re.search(padrao, texto, re.DOTALL)
+    return limpar_texto(match.group(1)) if match else None
+
+
+# =============================
+# EXTRAÇÃO
 # =============================
 def extrair_dados(texto):
 
-    def buscar(padrao):
-        match = re.search(padrao, texto, re.DOTALL)
-        return match.group(1).strip() if match else None
-
     dados = {}
 
-    # Identificação
-    dados['Recibo'] = buscar(r'Recibo de Atendimento #(\d+)')
-    dados['Data Recibo'] = buscar(r'\|\s*(\d{2}/\d{2}/\d{4} \d{2}:\d{2})')
+    dados['Recibo'] = limpar_texto(
+        re.search(r'Recibo de Atendimento #(\d+)', texto).group(1)
+        if re.search(r'Recibo de Atendimento #(\d+)', texto) else None
+    )
 
-    # Pessoas
-    dados['Solicitante'] = buscar(r'Solicitante\s*\n([A-Z\s]+)')
-    dados['Passageiro'] = buscar(r'Passageiro\s*\n(.+)')
+    dados['Data Recibo'] = limpar_texto(
+        re.search(r'\|\s*(\d{2}/\d{2}/\d{4} \d{2}:\d{2})', texto).group(1)
+        if re.search(r'\|\s*(\d{2}/\d{2}/\d{4} \d{2}:\d{2})', texto) else None
+    )
 
-    # Datas
-    dados['Solicitação'] = buscar(r'Solicitação\s*\n([\d/\s:]+)')
-    dados['Embarque'] = buscar(r'Embarque\s*\n([\d/\s:]+)')
-    dados['Desembarque'] = buscar(r'Desembarque\s*\n([\d/\s:]+)')
+    dados['Solicitante'] = buscar_bloco("Solicitante", "Passageiro", texto)
+    dados['Passageiro'] = buscar_bloco("Passageiro", "Qtd.", texto)
 
-    # Rota
-    dados['Origem'] = buscar(r'Origem\s+(.*?)\n')
-    dados['Destino'] = buscar(r'Destino\s+(.*?)\n')
+    dados['Solicitação'] = buscar_bloco("Solicitação", "Embarque", texto)
+    dados['Embarque'] = buscar_bloco("Embarque", "Desembarque", texto)
+    dados['Desembarque'] = buscar_bloco("Desembarque", "Origem", texto)
 
-    # Operacional
-    dados['Observações'] = buscar(r'Observações\s*\n(.+)')
-    dados['Distância (km)'] = buscar(r'Distância\s*\n(\d+)')
-    dados['Duração (min)'] = buscar(r'Duração\s*\n(\d+)')
+    dados['Origem'] = buscar_bloco("Origem", "Destino", texto)
+    dados['Destino'] = buscar_bloco("Destino", "Observações", texto)
 
-    # Financeiro
-    dados['Valor Corrida'] = buscar(r'Valor da Corrida\s*\nR\$ ([\d,]+)')
-    dados['Total Voucher'] = buscar(r'Total do Voucher\s*\nR\$ ([\d,]+)')
+    dados['Observações'] = buscar_bloco("Observações", "Distância", texto)
+
+    dados['Distância (km)'] = limpar_texto(
+        re.search(r'Distância\s*(\d+)', texto).group(1)
+        if re.search(r'Distância\s*(\d+)', texto) else "0"
+    )
+
+    dados['Duração (min)'] = limpar_texto(
+        re.search(r'Duração\s*(\d+)', texto).group(1)
+        if re.search(r'Duração\s*(\d+)', texto) else "0"
+    )
+
+    dados['Valor Corrida'] = limpar_texto(
+        re.search(r'Valor da Corrida\s*R\$ ([\d,]+)', texto).group(1)
+        if re.search(r'Valor da Corrida\s*R\$ ([\d,]+)', texto) else "0"
+    )
+
+    dados['Total Voucher'] = limpar_texto(
+        re.search(r'Total do Voucher\s*R\$ ([\d,]+)', texto).group(1)
+        if re.search(r'Total do Voucher\s*R\$ ([\d,]+)', texto) else "0"
+    )
+
+    dados['Pedágio'] = limpar_texto(
+        re.search(r'Pedágio\s*R\$ ([\d,]+)', texto).group(1)
+        if re.search(r'Pedágio\s*R\$ ([\d,]+)', texto) else "0"
+    )
 
     return dados
 
 
-# =============================
-# PROCESSAMENTO DO PDF
-# =============================
 def processar_pdf(arquivo):
-
     registros = []
-
     with pdfplumber.open(arquivo) as pdf:
         for pagina in pdf.pages:
             texto = pagina.extract_text()
-
             if texto:
-                dados = extrair_dados(texto)
-                registros.append(dados)
-
+                registros.append(extrair_dados(texto))
     return registros
 
 
 # =============================
 # UPLOAD
 # =============================
-arquivos = st.file_uploader(
-    "📎 Envie os PDFs",
-    type="pdf",
-    accept_multiple_files=True
-)
+arquivos = st.file_uploader("📎 Envie os PDFs", type="pdf", accept_multiple_files=True)
 
 if arquivos:
 
     todos = []
-
     for arquivo in arquivos:
         st.write(f"📄 Processando: {arquivo.name}")
-        dados = processar_pdf(arquivo)
-        todos.extend(dados)
+        todos.extend(processar_pdf(arquivo))
 
     df = pd.DataFrame(todos)
 
-    # Tratamento de valores
-    df['Valor Corrida'] = df['Valor Corrida'].str.replace(',', '.').astype(float)
-    df['Total Voucher'] = df['Total Voucher'].str.replace(',', '.').astype(float)
+    # =============================
+    # CONVERSÕES
+    # =============================
+    def converter_valor(coluna):
+        return (
+            coluna.fillna("0")
+            .str.replace('.', '', regex=False)
+            .str.replace(',', '.', regex=False)
+            .astype(float)
+        )
 
-    st.subheader("📊 Dados Extraídos")
+    df['Valor Corrida'] = converter_valor(df['Valor Corrida'])
+    df['Total Voucher'] = converter_valor(df['Total Voucher'])
+    df['Pedágio'] = converter_valor(df['Pedágio'])
+    df['Distância (km)'] = pd.to_numeric(df['Distância (km)'], errors='coerce').fillna(0)
+
+    # Data
+    df['Data Recibo'] = pd.to_datetime(df['Data Recibo'], errors='coerce')
+    df['Dia'] = df['Data Recibo'].dt.date
+
+    # =============================
+    # KPIs
+    # =============================
+    st.subheader("📊 Indicadores Gerais")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("🚗 KM Total", f"{df['Distância (km)'].sum():,.0f}")
+    col2.metric("🛣️ Pedágio", f"R$ {df['Pedágio'].sum():,.2f}")
+    col3.metric("💰 Voucher", f"R$ {df['Total Voucher'].sum():,.2f}")
+    col4.metric("📄 Qtde Recibos", len(df))
+
+    # =============================
+    # GRÁFICOS
+    # =============================
+    st.subheader("📈 Análises")
+
+    # Gasto por dia
+    gasto_dia = df.groupby('Dia')['Total Voucher'].sum().reset_index()
+    st.line_chart(gasto_dia.set_index('Dia'))
+
+    # KM por dia
+    km_dia = df.groupby('Dia')['Distância (km)'].sum().reset_index()
+    st.bar_chart(km_dia.set_index('Dia'))
+
+    # Top passageiros
+    top_passageiros = (
+        df.groupby('Passageiro')['Total Voucher']
+        .sum()
+        .sort_values(ascending=False)
+        .head(10)
+    )
+    st.subheader("👤 Top 10 Passageiros")
+    st.bar_chart(top_passageiros)
+
+    # =============================
+    # FILTRO
+    # =============================
+    st.subheader("🔍 Filtros")
+
+    passageiros = st.multiselect(
+        "Filtrar por Passageiro",
+        options=df['Passageiro'].dropna().unique()
+    )
+
+    if passageiros:
+        df = df[df['Passageiro'].isin(passageiros)]
+
+    # =============================
+    # TABELA
+    # =============================
+    st.subheader("📋 Dados Detalhados")
     st.dataframe(df, use_container_width=True)
 
-    # Download Excel
+    # =============================
+    # DOWNLOAD
+    # =============================
     buffer = BytesIO()
     df.to_excel(buffer, index=False)
 
     st.download_button(
         label="📥 Baixar Excel",
         data=buffer.getvalue(),
-        file_name="relatorio_mprj.xlsx",
+        file_name="dashboard_mprj.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
