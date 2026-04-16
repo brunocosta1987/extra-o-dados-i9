@@ -22,9 +22,21 @@ def buscar_bloco(inicio, fim, texto):
     return limpar_texto(match.group(1)) if match else None
 
 def buscar_valor(label, texto):
-    padrao = rf'{label}\s*R?\$?\s*([\d\.,]+)'
-    match = re.search(padrao, texto, re.DOTALL)
-    return limpar_texto(match.group(1)) if match else "0"
+
+    # pega um bloco maior depois do label
+    padrao = rf'{label}(.*?)(?:Total|Valor|Distância|Duração|$)'
+    match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
+
+    if match:
+        trecho = match.group(1)
+
+        # procura QUALQUER valor monetário dentro do trecho
+        valor = re.search(r'R?\$?\s*([\d\.,]+)', trecho)
+
+        if valor:
+            return limpar_texto(valor.group(1))
+
+    return "0"
 
 
 # =============================
