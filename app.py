@@ -21,14 +21,20 @@ def buscar_bloco(inicio, fim, texto):
     match = re.search(padrao, texto, re.DOTALL)
     return limpar_texto(match.group(1)) if match else None
 
+def buscar_valor(label, texto):
+    padrao = rf'{label}\s*R?\$?\s*([\d\.,]+)'
+    match = re.search(padrao, texto, re.DOTALL)
+    return limpar_texto(match.group(1)) if match else "0"
+
 
 # =============================
-# EXTRAÇÃO
+# EXTRAÇÃO DE DADOS
 # =============================
 def extrair_dados(texto):
 
     dados = {}
 
+    # Identificação
     dados['Recibo'] = limpar_texto(
         re.search(r'Recibo de Atendimento #(\d+)', texto).group(1)
         if re.search(r'Recibo de Atendimento #(\d+)', texto) else None
@@ -39,16 +45,20 @@ def extrair_dados(texto):
         if re.search(r'\|\s*(\d{2}/\d{2}/\d{4} \d{2}:\d{2})', texto) else None
     )
 
+    # Pessoas
     dados['Solicitante'] = buscar_bloco("Solicitante", "Passageiro", texto)
     dados['Passageiro'] = buscar_bloco("Passageiro", "Qtd.", texto)
 
+    # Datas
     dados['Solicitação'] = buscar_bloco("Solicitação", "Embarque", texto)
     dados['Embarque'] = buscar_bloco("Embarque", "Desembarque", texto)
     dados['Desembarque'] = buscar_bloco("Desembarque", "Origem", texto)
 
+    # Rota
     dados['Origem'] = buscar_bloco("Origem", "Destino", texto)
     dados['Destino'] = buscar_bloco("Destino", "Observações", texto)
 
+    # Operacional
     dados['Observações'] = buscar_bloco("Observações", "Distância", texto)
 
     dados['Distância (km)'] = limpar_texto(
@@ -61,45 +71,49 @@ def extrair_dados(texto):
         if re.search(r'Duração\s*(\d+)', texto) else "0"
     )
 
-    dados['Valor Corrida'] = limpar_texto(
-        re.search(r'Valor da Corrida\s*R\$ ([\d,]+)', texto).group(1)
-        if re.search(r'Valor da Corrida\s*R\$ ([\d,]+)', texto) else "0"
-    )
-
-    dados['Total Voucher'] = limpar_texto(
-        re.search(r'Total do Voucher\s*R\$ ([\d,]+)', texto).group(1)
-        if re.search(r'Total do Voucher\s*R\$ ([\d,]+)', texto) else "0"
-    )
-
-    dados['Pedágio'] = limpar_texto(
-        re.search(r'Pedágio\s*R\$ ([\d,]+)', texto).group(1)
-        if re.search(r'Pedágio\s*R\$ ([\d,]+)', texto) else "0"
-    )
+    # Financeiro (CORRIGIDO)
+    dados['Valor Corrida'] = buscar_valor("Valor da Corrida", texto)
+    dados['Total Voucher'] = buscar_valor("Total do Voucher", texto)
+    dados['Pedágio'] = buscar_valor("Pedágio", texto)
 
     return dados
 
 
+# =============================
+# PROCESSAMENTO
+# =============================
 def processar_pdf(arquivo):
+
     registros = []
+
     with pdfplumber.open(arquivo) as pdf:
         for pagina in pdf.pages:
             texto = pagina.extract_text()
+
             if texto:
-                registros.append(extrair_dados(texto))
+                dados = extrair_dados(texto)
+                registros.append(dados)
+
     return registros
 
 
 # =============================
-# UPLOAD
+# INTERFACE
 # =============================
-arquivos = st.file_uploader("📎 Envie os PDFs", type="pdf", accept_multiple_files=True)
+arquivos = st.file_uploader(
+    "📎 Envie os PDFs",
+    type="pdf",
+    accept_multiple_files=True
+)
 
 if arquivos:
 
     todos = []
+
     for arquivo in arquivos:
         st.write(f"📄 Processando: {arquivo.name}")
-        todos.extend(processar_pdf(arquivo))
+        dados = processar_pdf(arquivo)
+        todos.extend(dados)
 
     df = pd.DataFrame(todos)
 
@@ -109,6 +123,7 @@ if arquivos:
     def converter_valor(coluna):
         return (
             coluna.fillna("0")
+            .astype(str)
             .str.replace('.', '', regex=False)
             .str.replace(',', '.', regex=False)
             .astype(float)
@@ -119,7 +134,7 @@ if arquivos:
     df['Pedágio'] = converter_valor(df['Pedágio'])
     df['Distância (km)'] = pd.to_numeric(df['Distância (km)'], errors='coerce').fillna(0)
 
-    # Data
+    # Datas
     df['Data Recibo'] = pd.to_datetime(df['Data Recibo'], errors='coerce')
     df['Dia'] = df['Data Recibo'].dt.date
 
@@ -140,26 +155,23 @@ if arquivos:
     # =============================
     st.subheader("📈 Análises")
 
-    # Gasto por dia
     gasto_dia = df.groupby('Dia')['Total Voucher'].sum().reset_index()
     st.line_chart(gasto_dia.set_index('Dia'))
 
-    # KM por dia
     km_dia = df.groupby('Dia')['Distância (km)'].sum().reset_index()
     st.bar_chart(km_dia.set_index('Dia'))
 
-    # Top passageiros
+    st.subheader("👤 Top 10 Passageiros")
     top_passageiros = (
         df.groupby('Passageiro')['Total Voucher']
         .sum()
         .sort_values(ascending=False)
         .head(10)
     )
-    st.subheader("👤 Top 10 Passageiros")
     st.bar_chart(top_passageiros)
 
     # =============================
-    # FILTRO
+    # FILTROS
     # =============================
     st.subheader("🔍 Filtros")
 
