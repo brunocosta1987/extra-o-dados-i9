@@ -18,19 +18,21 @@ def limpar_texto(texto):
 
 def buscar_bloco(inicio, fim, texto):
     padrao = rf'{inicio}\s*(.*?)\s*{fim}'
-    match = re.search(padrao, texto, re.DOTALL)
+    match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
     return limpar_texto(match.group(1)) if match else None
 
+
+# 🔥 FUNÇÃO ROBUSTA PARA VALORES
 def buscar_valor(label, texto):
 
-    # pega um bloco maior depois do label
-    padrao = rf'{label}(.*?)(?:Total|Valor|Distância|Duração|$)'
+    # pega bloco maior após o label
+    padrao = rf'{label}(.*?)(?:Valor|Total|Distância|Duração|$)'
     match = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
 
     if match:
         trecho = match.group(1)
 
-        # procura QUALQUER valor monetário dentro do trecho
+        # pega qualquer número monetário dentro do bloco
         valor = re.search(r'R?\$?\s*([\d\.,]+)', trecho)
 
         if valor:
@@ -40,13 +42,12 @@ def buscar_valor(label, texto):
 
 
 # =============================
-# EXTRAÇÃO DE DADOS
+# EXTRAÇÃO
 # =============================
 def extrair_dados(texto):
 
     dados = {}
 
-    # Identificação
     dados['Recibo'] = limpar_texto(
         re.search(r'Recibo de Atendimento #(\d+)', texto).group(1)
         if re.search(r'Recibo de Atendimento #(\d+)', texto) else None
@@ -57,20 +58,16 @@ def extrair_dados(texto):
         if re.search(r'\|\s*(\d{2}/\d{2}/\d{4} \d{2}:\d{2})', texto) else None
     )
 
-    # Pessoas
     dados['Solicitante'] = buscar_bloco("Solicitante", "Passageiro", texto)
     dados['Passageiro'] = buscar_bloco("Passageiro", "Qtd.", texto)
 
-    # Datas
     dados['Solicitação'] = buscar_bloco("Solicitação", "Embarque", texto)
     dados['Embarque'] = buscar_bloco("Embarque", "Desembarque", texto)
     dados['Desembarque'] = buscar_bloco("Desembarque", "Origem", texto)
 
-    # Rota
     dados['Origem'] = buscar_bloco("Origem", "Destino", texto)
     dados['Destino'] = buscar_bloco("Destino", "Observações", texto)
 
-    # Operacional
     dados['Observações'] = buscar_bloco("Observações", "Distância", texto)
 
     dados['Distância (km)'] = limpar_texto(
@@ -83,7 +80,7 @@ def extrair_dados(texto):
         if re.search(r'Duração\s*(\d+)', texto) else "0"
     )
 
-    # Financeiro (CORRIGIDO)
+    # 🔥 VALORES CORRIGIDOS
     dados['Valor Corrida'] = buscar_valor("Valor da Corrida", texto)
     dados['Total Voucher'] = buscar_valor("Total do Voucher", texto)
     dados['Pedágio'] = buscar_valor("Pedágio", texto)
@@ -103,8 +100,7 @@ def processar_pdf(arquivo):
             texto = pagina.extract_text()
 
             if texto:
-                dados = extrair_dados(texto)
-                registros.append(dados)
+                registros.append(extrair_dados(texto))
 
     return registros
 
@@ -124,19 +120,18 @@ if arquivos:
 
     for arquivo in arquivos:
         st.write(f"📄 Processando: {arquivo.name}")
-        dados = processar_pdf(arquivo)
-        todos.extend(dados)
+        todos.extend(processar_pdf(arquivo))
 
     df = pd.DataFrame(todos)
 
     # =============================
-    # CONVERSÕES
+    # CONVERSÃO CORRIGIDA
     # =============================
     def converter_valor(coluna):
         return (
             coluna.fillna("0")
             .astype(str)
-            .str.replace('.', '', regex=False)
+            .str.replace(r'[^\d,]', '', regex=True)
             .str.replace(',', '.', regex=False)
             .astype(float)
         )
@@ -146,7 +141,6 @@ if arquivos:
     df['Pedágio'] = converter_valor(df['Pedágio'])
     df['Distância (km)'] = pd.to_numeric(df['Distância (km)'], errors='coerce').fillna(0)
 
-    # Datas
     df['Data Recibo'] = pd.to_datetime(df['Data Recibo'], errors='coerce')
     df['Dia'] = df['Data Recibo'].dt.date
 
@@ -183,7 +177,7 @@ if arquivos:
     st.bar_chart(top_passageiros)
 
     # =============================
-    # FILTROS
+    # FILTRO
     # =============================
     st.subheader("🔍 Filtros")
 
